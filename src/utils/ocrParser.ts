@@ -109,7 +109,8 @@ export class BingoOCRParser {
   }
 
   private isLikelyNumber(text: string): boolean {
-    return /\d/.test(text) && text.length <= 6;
+    // More restrictive: only allow strings up to 4 characters that contain digits
+    return /\d/.test(text) && text.length <= 4;
   }
 
   private splitConcatenatedNumbers(text: string): number[] {
@@ -118,28 +119,44 @@ export class BingoOCRParser {
     
     if (cleanText.length === 0) return numbers;
     
-    // Try to split based on known patterns
-    if (cleanText.length === 4) {
-      // Could be two 2-digit numbers
-      const first = parseInt(cleanText.substring(0, 2));
-      const second = parseInt(cleanText.substring(2, 4));
-      if (this.isValidBingoNumber(first) && this.isValidBingoNumber(second)) {
-        numbers.push(first, second);
+    // Extract all possible 1-digit and 2-digit numbers from the text
+    for (let i = 0; i < cleanText.length; i++) {
+      // Try 2-digit number first (if possible)
+      if (i + 1 < cleanText.length) {
+        const twoDigit = parseInt(cleanText.substring(i, i + 2));
+        if (this.isValidBingoNumber(twoDigit)) {
+          numbers.push(twoDigit);
+          i++; // Skip the next digit since we used it
+          continue;
+        }
       }
-    } else if (cleanText.length === 3) {
-      // Could be 1-digit + 2-digit or 2-digit + 1-digit
-      const option1 = [parseInt(cleanText[0]), parseInt(cleanText.substring(1))];
-      const option2 = [parseInt(cleanText.substring(0, 2)), parseInt(cleanText[2])];
       
-      if (option1.every(n => this.isValidBingoNumber(n))) {
-        numbers.push(...option1);
-      } else if (option2.every(n => this.isValidBingoNumber(n))) {
-        numbers.push(...option2);
+      // Try 1-digit number
+      const oneDigit = parseInt(cleanText[i]);
+      if (this.isValidBingoNumber(oneDigit)) {
+        numbers.push(oneDigit);
       }
-    } else if (cleanText.length <= 2) {
-      const num = parseInt(cleanText);
-      if (this.isValidBingoNumber(num)) {
-        numbers.push(num);
+    }
+    
+    // If no valid numbers found using the above method, try other splitting patterns
+    if (numbers.length === 0) {
+      if (cleanText.length === 4) {
+        // Could be two 2-digit numbers
+        const first = parseInt(cleanText.substring(0, 2));
+        const second = parseInt(cleanText.substring(2, 4));
+        if (this.isValidBingoNumber(first) && this.isValidBingoNumber(second)) {
+          numbers.push(first, second);
+        }
+      } else if (cleanText.length === 3) {
+        // Could be 1-digit + 2-digit or 2-digit + 1-digit
+        const option1 = [parseInt(cleanText[0]), parseInt(cleanText.substring(1))];
+        const option2 = [parseInt(cleanText.substring(0, 2)), parseInt(cleanText[2])];
+        
+        if (option1.every(n => this.isValidBingoNumber(n))) {
+          numbers.push(...option1);
+        } else if (option2.every(n => this.isValidBingoNumber(n))) {
+          numbers.push(...option2);
+        }
       }
     }
     
@@ -147,7 +164,7 @@ export class BingoOCRParser {
   }
 
   private isValidBingoNumber(num: number): boolean {
-    return num >= 1 && num <= 75;
+    return num >= 1 && num <= 75 && !isNaN(num);
   }
 
   private validateNumberInColumn(number: number, col: number): boolean {
@@ -180,7 +197,30 @@ export class BingoOCRParser {
             return this.isInGridPosition(centerX, centerY, row, col, gridPositions);
           });
           
-          freeSpaceContent = freeSpaceResult?.text || 'FREE';
+          if (freeSpaceResult) {
+            // Try to extract a valid bingo number from the free space
+            const extractedNumbers = this.splitConcatenatedNumbers(freeSpaceResult.text);
+            const validNumbers = extractedNumbers.filter(num => this.isValidBingoNumber(num));
+            
+            if (validNumbers.length === 1) {
+              // Found exactly one valid number in the free space
+              const num = validNumbers[0];
+              numbers.push({
+                value: num,
+                isOdd: num % 2 === 1,
+                row,
+                col,
+                confidence: freeSpaceResult.confidence
+              });
+              totalConfidence += freeSpaceResult.confidence;
+              freeSpaceContent = 'FREE'; // Display as FREE even though it has a number
+            } else {
+              // No valid number or multiple numbers found
+              freeSpaceContent = freeSpaceResult.text.trim() || 'FREE';
+            }
+          } else {
+            freeSpaceContent = 'FREE';
+          }
           continue;
         }
 
