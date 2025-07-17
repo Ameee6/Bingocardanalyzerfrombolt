@@ -49,6 +49,7 @@ export class BingoOCRParser {
 
     const textAnnotations = result.responses[0].textAnnotations || [];
     
+    // The first annotation is usually the full text detected, we want individual words/numbers
     return textAnnotations.slice(1).map((annotation: any) => ({
       text: annotation.description,
       confidence: annotation.confidence || 0.8,
@@ -56,111 +57,60 @@ export class BingoOCRParser {
     }));
   }
 
-  private calculateGridPositions(ocrResults: OCRResult[]): GridPosition[] {
-    // Sort by Y coordinate to get rows, then by X coordinate to get columns
-    const sortedResults = ocrResults
-      .filter(result => this.isLikelyNumber(result.text))
-      .sort((a, b) => {
-        const aY = this.getCenterY(a.vertices);
-        const bY = this.getCenterY(b.vertices);
-        if (Math.abs(aY - bY) < 20) { // Same row
-          return this.getCenterX(a.vertices) - this.getCenterX(b.vertices);
-        }
-        return aY - bY;
-      });
-
-    const gridPositions: GridPosition[] = [];
-    let currentRow = 0;
-    let currentCol = 0;
-    let lastY = -1;
-
-    for (const result of sortedResults) {
-      const centerY = this.getCenterY(result.vertices);
-      const centerX = this.getCenterX(result.vertices);
-
-      if (lastY === -1 || Math.abs(centerY - lastY) > 20) {
-        // New row
-        currentRow = Math.floor(gridPositions.length / this.GRID_SIZE);
-        currentCol = 0;
-        lastY = centerY;
-      } else {
-        currentCol++;
-      }
-
-      if (currentRow < this.GRID_SIZE && currentCol < this.GRID_SIZE) {
-        gridPositions.push({
-          row: currentRow,
-          col: currentCol,
-          centerX,
-          centerY
-        });
-      }
-    }
-
-    return gridPositions;
+  private getCenter(vertices: { x: number; y: number }[]): { x: number; y: number } {
+    const xs = vertices.map(v => v.x);
+    const ys = vertices.map(v => v.y);
+    return {
+      x: (Math.min(...xs) + Math.max(...xs)) / 2,
+      y: (Math.min(...ys) + Math.max(...ys)) / 2
+    };
   }
 
-  private getCenterX(vertices: { x: number; y: number }[]): number {
-    return vertices.reduce((sum, v) => sum + v.x, 0) / vertices.length;
-  }
-
-  private getCenterY(vertices: { x: number; y: number }[]): number {
-    return vertices.reduce((sum, v) => sum + v.y, 0) / vertices.length;
+  private getBoundingBox(vertices: { x: number; y: number }[]): { minX: number; minY: number; maxX: number; maxY: number } {
+    const xs = vertices.map(v => v.x);
+    const ys = vertices.map(v => v.y);
+    return {
+      minX: Math.min(...xs),
+      minY: Math.min(...ys),
+      maxX: Math.max(...xs),
+      maxY: Math.max(...ys)
+    };
   }
 
   private isLikelyNumber(text: string): boolean {
-    // More restrictive: only allow strings up to 4 characters that contain digits
-    return /\d/.test(text) && text.length <= 4;
+    // Allow strings up to 4 characters that contain digits, but not just symbols
+    return /\d/.test(text) && text.length <= 4 && !/^[^\w\s]+$/.test(text);
   }
 
   private splitConcatenatedNumbers(text: string): number[] {
     const numbers: number[] = [];
-    const cleanText = text.replace(/[^\d]/g, '');
+    const cleanText = text.replace(/[^\d]/g, ''); // Remove non-digits
     
     if (cleanText.length === 0) return numbers;
     
-    // Extract all possible 1-digit and 2-digit numbers from the text
-    for (let i = 0; i < cleanText.length; i++) {
-      // Try 2-digit number first (if possible)
-      if (i + 1 < cleanText.length) {
+    // Prioritize 2-digit numbers if they form valid bingo numbers
+    if (cleanText.length >= 2) {
+      for (let i = 0; i <= cleanText.length - 2; i++) {
         const twoDigit = parseInt(cleanText.substring(i, i + 2));
         if (this.isValidBingoNumber(twoDigit)) {
           numbers.push(twoDigit);
-          i++; // Skip the next digit since we used it
-          continue;
+          // If we found a 2-digit number, try to parse the rest of the string
+          // This simple approach might need refinement for complex cases like "1234" -> [12, 34]
+          // For now, it will find all valid 2-digit numbers.
         }
       }
-      
-      // Try 1-digit number
+    }
+
+    // Also consider 1-digit numbers if no 2-digit numbers were found or as standalone
+    for (let i = 0; i < cleanText.length; i++) {
       const oneDigit = parseInt(cleanText[i]);
-      if (this.isValidBingoNumber(oneDigit)) {
+      if (this.isValidBingoNumber(oneDigit) && !numbers.includes(oneDigit)) { // Avoid duplicates if 1-digit is part of 2-digit
         numbers.push(oneDigit);
       }
     }
-    
-    // If no valid numbers found using the above method, try other splitting patterns
-    if (numbers.length === 0) {
-      if (cleanText.length === 4) {
-        // Could be two 2-digit numbers
-        const first = parseInt(cleanText.substring(0, 2));
-        const second = parseInt(cleanText.substring(2, 4));
-        if (this.isValidBingoNumber(first) && this.isValidBingoNumber(second)) {
-          numbers.push(first, second);
-        }
-      } else if (cleanText.length === 3) {
-        // Could be 1-digit + 2-digit or 2-digit + 1-digit
-        const option1 = [parseInt(cleanText[0]), parseInt(cleanText.substring(1))];
-        const option2 = [parseInt(cleanText.substring(0, 2)), parseInt(cleanText[2])];
-        
-        if (option1.every(n => this.isValidBingoNumber(n))) {
-          numbers.push(...option1);
-        } else if (option2.every(n => this.isValidBingoNumber(n))) {
-          numbers.push(...option2);
-        }
-      }
-    }
-    
-    return numbers;
+
+    // Sort and filter unique valid numbers
+    return Array.from(new Set(numbers.filter(n => this.isValidBingoNumber(n)))).sort((a, b) => a - b);
   }
 
   private isValidBingoNumber(num: number): boolean {
@@ -181,58 +131,70 @@ export class BingoOCRParser {
       throw new Error('No text detected in the image');
     }
 
-    const gridPositions = this.calculateGridPositions(ocrResults);
+    // Find the overall bounding box of the card using the first (largest) text annotation
+    // Or, if the first annotation is not reliable, find the min/max of all relevant annotations
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    
+    // Use all OCR results to determine the overall card boundaries
+    ocrResults.forEach(result => {
+      const bbox = this.getBoundingBox(result.vertices);
+      minX = Math.min(minX, bbox.minX);
+      minY = Math.min(minY, bbox.minY);
+      maxX = Math.max(maxX, bbox.maxX);
+      maxY = Math.max(maxY, bbox.maxY);
+    });
+
+    // Calculate cell dimensions based on the overall card bounding box
+    const cellWidth = (maxX - minX) / this.GRID_SIZE;
+    const cellHeight = (maxY - minY) / this.GRID_SIZE;
+
+    // Initialize a 5x5 grid to hold OCR results for each cell
+    const gridCells: OCRResult[][][] = Array(this.GRID_SIZE).fill(null).map(() => 
+      Array(this.GRID_SIZE).fill(null).map(() => [])
+    );
+
+    // Map OCR results to their respective grid cells
+    ocrResults.forEach(result => {
+      const center = this.getCenter(result.vertices);
+      const col = Math.floor((center.x - minX) / cellWidth);
+      const row = Math.floor((center.y - minY) / cellHeight);
+
+      if (row >= 0 && row < this.GRID_SIZE && col >= 0 && col < this.GRID_SIZE) {
+        gridCells[row][col].push(result);
+      }
+    });
+
     const numbers: BingoNumber[] = [];
     let freeSpaceContent: string | null = null;
     let totalConfidence = 0;
+    let detectedNumberCount = 0;
 
-    // Process each grid position
+    // Process each cell in the 5x5 grid
     for (let row = 0; row < this.GRID_SIZE; row++) {
       for (let col = 0; col < this.GRID_SIZE; col++) {
-        // Check if this is the FREE space
+        const cellResults = gridCells[row][col];
+        
+        // Sort results by confidence to prioritize more confident detections
+        cellResults.sort((a, b) => b.confidence - a.confidence);
+
+        let foundValidNumberInCell = false;
+
+        // Handle FREE space specifically
         if (row === this.FREE_SPACE_ROW && col === this.FREE_SPACE_COL) {
-          const freeSpaceResult = ocrResults.find(result => {
-            const centerX = this.getCenterX(result.vertices);
-            const centerY = this.getCenterY(result.vertices);
-            return this.isInGridPosition(centerX, centerY, row, col, gridPositions);
-          });
-          
-          if (freeSpaceResult) {
-            // Try to extract a valid bingo number from the free space
-            const extractedNumbers = this.splitConcatenatedNumbers(freeSpaceResult.text);
-            const validNumbers = extractedNumbers.filter(num => this.isValidBingoNumber(num));
-            
-            if (validNumbers.length === 1) {
-              // Found exactly one valid number in the free space
-              const num = validNumbers[0];
-              numbers.push({
-                value: num,
-                isOdd: num % 2 === 1,
-                row,
-                col,
-                confidence: freeSpaceResult.confidence
-              });
-              totalConfidence += freeSpaceResult.confidence;
-              freeSpaceContent = 'FREE'; // Display as FREE even though it has a number
-            } else {
-              // No valid number or multiple numbers found
-              freeSpaceContent = freeSpaceResult.text.trim() || 'FREE';
-            }
+          if (cellResults.length > 0) {
+            // Take the text from the most confident result for free space content
+            freeSpaceContent = cellResults[0].text.trim();
           } else {
-            freeSpaceContent = 'FREE';
+            freeSpaceContent = 'FREE'; // Default if nothing detected
           }
-          continue;
+          // IMPORTANT: Do NOT add any number from the free space to the 'numbers' array
+          // This ensures it doesn't count towards odds/evens for game analysis.
+          continue; 
         }
 
-        // Find OCR result for this grid position
-        const resultForPosition = ocrResults.find(result => {
-          const centerX = this.getCenterX(result.vertices);
-          const centerY = this.getCenterY(result.vertices);
-          return this.isInGridPosition(centerX, centerY, row, col, gridPositions);
-        });
-
-        if (resultForPosition) {
-          const extractedNumbers = this.splitConcatenatedNumbers(resultForPosition.text);
+        // Process other 24 cells
+        for (const result of cellResults) {
+          const extractedNumbers = this.splitConcatenatedNumbers(result.text);
           
           for (const num of extractedNumbers) {
             if (this.validateNumberInColumn(num, col)) {
@@ -241,12 +203,15 @@ export class BingoOCRParser {
                 isOdd: num % 2 === 1,
                 row,
                 col,
-                confidence: resultForPosition.confidence
+                confidence: result.confidence
               });
-              totalConfidence += resultForPosition.confidence;
+              totalConfidence += result.confidence;
+              detectedNumberCount++;
+              foundValidNumberInCell = true;
               break; // Only take the first valid number per cell
             }
           }
+          if (foundValidNumberInCell) break; // Move to next cell if a valid number was found
         }
       }
     }
@@ -259,25 +224,8 @@ export class BingoOCRParser {
       freeSpaceContent,
       oddsCount,
       evensCount,
-      totalNumbers: numbers.length,
-      confidence: numbers.length > 0 ? totalConfidence / numbers.length : 0
+      totalNumbers: detectedNumberCount, // Use detectedNumberCount for total numbers
+      confidence: detectedNumberCount > 0 ? totalConfidence / detectedNumberCount : 0
     };
-  }
-
-  private isInGridPosition(
-    centerX: number,
-    centerY: number,
-    targetRow: number,
-    targetCol: number,
-    gridPositions: GridPosition[]
-  ): boolean {
-    const target = gridPositions.find(pos => pos.row === targetRow && pos.col === targetCol);
-    if (!target) return false;
-
-    const distance = Math.sqrt(
-      Math.pow(centerX - target.centerX, 2) + Math.pow(centerY - target.centerY, 2)
-    );
-    
-    return distance < 50; // Tolerance for position matching
   }
 }
