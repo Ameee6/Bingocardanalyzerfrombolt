@@ -229,3 +229,22 @@ export class BingoOCRParser {
     };
   }
 }
+
+// ... (rest of the imports and class definition)
+
+export class BingoOCRParser {
+  // ... (rest of your class properties and methods)
+
+  async parseBingoCard(imageBase64: string, apiKey: string): Promise<BingoCard> {
+    const ocrResults = await this.callGoogleVisionAPI(imageBase64, apiKey);
+    
+    // Add this line to log the raw OCR results
+    console.log('Raw OCR Results:', ocrResults); 
+    
+    if (ocrResults.length === 0) {
+      throw new Error('No text detected in the image');
+    }
+
+    // ... (rest of your parseBingoCard method)
+  }
+}
