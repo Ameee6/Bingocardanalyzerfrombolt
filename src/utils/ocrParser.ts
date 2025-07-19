@@ -78,9 +78,18 @@ export class BingoOCRParser {
   }
 
   private shouldProcessOCRResult(text: string): boolean {
+  private shouldProcessOCRResult(result: OCRResult): boolean {
+    const text = result.text;
+    const confidence = result.confidence;
+    
     // Allow "FREE" or "SPACE" for the free space
     if (text.toUpperCase() === 'FREE' || text.toUpperCase() === 'SPACE') {
       return true;
+    }
+    
+    // Apply confidence threshold for number detection (but not for FREE space)
+    if (confidence < 0.7) {
+      return false;
     }
     
     // Must contain at least one digit
@@ -91,8 +100,8 @@ export class BingoOCRParser {
     // Remove all non-digit characters and check if we have a reasonable length
     const digitsOnly = text.replace(/[^\d]/g, '');
     
-    // Must have at least 1 digit and not more than 12 (to handle concatenated numbers)
-    if (digitsOnly.length < 1 || digitsOnly.length > 12) {
+    // Must have at least 1 digit and not more than 6 (stricter limit for concatenated numbers)
+    if (digitsOnly.length < 1 || digitsOnly.length > 6) {
       return false;
     }
     
@@ -195,7 +204,7 @@ export class BingoOCRParser {
     console.log('Raw OCR Results:', rawOcrResults);
     
     // Filter OCR results to only include likely numbers or FREE space content
-    const ocrResults = rawOcrResults.filter(result => this.shouldProcessOCRResult(result.text));
+    const ocrResults = rawOcrResults.filter(result => this.shouldProcessOCRResult(result));
     
     // Add this line to log the filtered OCR results
     console.log('Filtered OCR Results:', ocrResults);
