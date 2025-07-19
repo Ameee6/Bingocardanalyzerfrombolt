@@ -101,8 +101,9 @@ export class BingoOCRParser {
     // Remove all non-digit characters and check if we have a reasonable length
     const digitsOnly = text.replace(/[^\d]/g, '');
     
-    // Must have at least 1 digit and not more than 6 (stricter limit for concatenated numbers)
-    if (digitsOnly.length < 1 || digitsOnly.length > 6) {
+    // Only allow specific lengths: 1 digit, 2 digits, or 4 digits (two concatenated 2-digit numbers)
+    // This filters out 3-digit numbers and long identifiers (5+ digits)
+    if (digitsOnly.length < 1 || (digitsOnly.length !== 1 && digitsOnly.length !== 2 && digitsOnly.length !== 4)) {
       return false;
     }
     
