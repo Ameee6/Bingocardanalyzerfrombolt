@@ -168,33 +168,31 @@ export class BingoOCRParser {
   private extractAllPossibleNumbers(text: string): number[] {
     const numbers = new Set<number>();
     
-    // Strategy 1: Direct number extraction
-    const directMatches = text.match(/\d{1,2}/g) || [];
-    directMatches.forEach(match => {
+    // Strategy 1: Look for exact 1-2 digit matches first (highest priority)
+    // Use word boundaries to find complete numbers, not parts of larger strings
+    const exactMatches = text.match(/\b\d{1,2}\b/g) || [];
+    exactMatches.forEach(match => {
       const num = parseInt(match);
       if (this.isValidBingoNumber(num)) numbers.add(num);
     });
     
-    // Strategy 2: With OCR correction
-    const corrected = this.correctOCRErrors(text);
-    const correctedMatches = corrected.match(/\d{1,2}/g) || [];
-    correctedMatches.forEach(match => {
-      const num = parseInt(match);
-      if (this.isValidBingoNumber(num)) numbers.add(num);
-    });
+    // Strategy 2: Only if no exact matches, try corrected text
+    if (numbers.size === 0) {
+      const corrected = this.correctOCRErrors(text);
+      const correctedMatches = corrected.match(/\b\d{1,2}\b/g) || [];
+      correctedMatches.forEach(match => {
+        const num = parseInt(match);
+        if (this.isValidBingoNumber(num)) numbers.add(num);
+      });
+    }
     
-    // Strategy 3: Character-by-character analysis
-    for (let i = 0; i < text.length; i++) {
-      // Try 1-digit
-      if (/\d/.test(text[i])) {
-        const num = parseInt(text[i]);
-        if (this.isValidBingoNumber(num)) numbers.add(num);
-      }
-      
-      // Try 2-digit
-      if (i < text.length - 1 && /\d/.test(text[i]) && /\d/.test(text[i + 1])) {
-        const num = parseInt(text.substring(i, i + 2));
-        if (this.isValidBingoNumber(num)) numbers.add(num);
+    // Strategy 3: Only if still no matches, try individual digits (last resort)
+    if (numbers.size === 0) {
+      for (let i = 0; i < text.length; i++) {
+        if (/\d/.test(text[i])) {
+          const num = parseInt(text[i]);
+          if (this.isValidBingoNumber(num)) numbers.add(num);
+        }
       }
     }
     
