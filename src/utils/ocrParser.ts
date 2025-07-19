@@ -27,6 +27,59 @@ export class BingoOCRParser {
   async callGoogleVisionAPI(imageBase64: string, apiKey: string): Promise<OCRResult[]> {
     console.log("Starting OCR analysis...");
     
+    // Validate and extract base64 content
+    console.log("=== BASE64 VALIDATION ===");
+    console.log("Full base64 length:", imageBase64.length);
+    console.log("Base64 starts with:", imageBase64.substring(0, 50));
+    console.log("Has data URL prefix:", imageBase64.startsWith('data:'));
+    
+    const base64Parts = imageBase64.split(',');
+    console.log("Split parts count:", base64Parts.length);
+    
+    if (base64Parts.length !== 2) {
+      throw new Error('Invalid image data format. Expected data URL with base64 content.');
+    }
+    
+    const base64Content = base64Parts[1];
+    console.log("Extracted base64 content length:", base64Content.length);
+    console.log("Base64 content starts with:", base64Content.substring(0, 50));
+    
+    if (!base64Content || base64Content.length === 0) {
+      throw new Error('Empty base64 content extracted from image data.');
+    }
+    
+    // Validate base64 format (basic check)
+    const base64Regex = /^[A-Za-z0-9+/]*={0,2}$/;
+    if (!base64Regex.test(base64Content)) {
+      throw new Error('Invalid base64 format detected.');
+    }
+    
+    // Construct the request payload
+    const requestPayload = {
+      requests: [
+        {
+          image: {
+            content: base64Content
+          },
+          features: [
+            { type: 'TEXT_DETECTION', maxResults: 100 },
+            { type: 'DOCUMENT_TEXT_DETECTION', maxResults: 50 }
+          ],
+          imageContext: {
+            textDetectionParams: {
+              enableTextDetectionConfidenceScore: true,
+              includeTextDetectionConfidenceScore: true
+            },
+            languageHints: ["en"]
+          }
+        }
+      ]
+    };
+    
+    console.log("=== REQUEST PAYLOAD VALIDATION ===");
+    console.log("Request payload structure:", JSON.stringify(requestPayload, null, 2));
+    console.log("Payload size:", JSON.stringify(requestPayload).length, "bytes");
+    
     const response = await fetch(
       `https://vision.googleapis.com/v1/images:annotate?key=${apiKey}`,
       {
@@ -34,36 +87,26 @@ export class BingoOCRParser {
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({
-          requests: [
-            {
-              image: {
-                content: imageBase64.split(',')[1]
-              },
-              features: [
-                { type: 'TEXT_DETECTION', maxResults: 100 },
-                { type: 'DOCUMENT_TEXT_DETECTION', maxResults: 50 }
-              ],
-              imageContext: {
-                textDetectionParams: {
-                  enableTextDetectionConfidenceScore: true,
-                  includeTextDetectionConfidenceScore: true
-                },
-                languageHints: ["en"]
-              }
-            }
-          ]
-        })
+        body: JSON.stringify(requestPayload)
       }
     );
 
+    console.log("=== API RESPONSE ===");
+    console.log("Response status:", response.status);
+    console.log("Response headers:", Object.fromEntries(response.headers.entries()));
+    
     if (!response.ok) {
+      const responseText = await response.text();
+      console.log("Error response body:", responseText);
+      
       if (response.status === 429) {
         throw new Error("API quota exceeded. Please try again later.");
       } else if (response.status === 403) {
         throw new Error("Invalid API key. Please check your configuration.");
+      } else if (response.status === 400) {
+        throw new Error(`Bad request to Vision API. Response: ${responseText}`);
       } else {
-        throw new Error(`Vision API error: ${response.status}`);
+        throw new Error(`Vision API error: ${response.status}. Response: ${responseText}`);
       }
     }
 
