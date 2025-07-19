@@ -251,7 +251,6 @@ export class BingoOCRParser {
         // Sort results by confidence to prioritize more confident detections
         cellResults.sort((a, b) => b.confidence - a.confidence);
 
-        let foundValidNumberInCell = false;
 
         // Handle FREE space specifically
         if (row === this.FREE_SPACE_ROW && col === this.FREE_SPACE_COL) {
@@ -266,26 +265,34 @@ export class BingoOCRParser {
           continue; 
         }
 
-        // Process other 24 cells
+        // Process other 24 cells - collect all valid candidates first
+        const cellCandidates: BingoNumber[] = [];
+        
         for (const result of cellResults) {
           const extractedNumbers = this.splitConcatenatedNumbers(result.text);
           
           for (const num of extractedNumbers) {
             if (this.validateNumberInColumn(num, col)) {
-              numbers.push({
+              cellCandidates.push({
                 value: num,
                 isOdd: num % 2 === 1,
                 row,
                 col,
                 confidence: result.confidence
               });
-              totalConfidence += result.confidence;
-              detectedNumberCount++;
-              foundValidNumberInCell = true;
-              break; // Only take the first valid number per cell
             }
           }
-          if (foundValidNumberInCell) break; // Move to next cell if a valid number was found
+        }
+        
+        // Select the best candidate (highest confidence) for this cell
+        if (cellCandidates.length > 0) {
+          // Sort by confidence (highest first)
+          cellCandidates.sort((a, b) => b.confidence - a.confidence);
+          const bestCandidate = cellCandidates[0];
+          
+          numbers.push(bestCandidate);
+          totalConfidence += bestCandidate.confidence;
+          detectedNumberCount++;
         }
       }
     }
