@@ -67,8 +67,7 @@ export class BingoOCRParser {
           ],
           imageContext: {
             textDetectionParams: {
-              enableTextDetectionConfidenceScore: true,
-              includeTextDetectionConfidenceScore: true
+              enableTextDetectionConfidenceScore: true
             },
             languageHints: ["en"]
           }
