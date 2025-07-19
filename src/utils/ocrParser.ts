@@ -77,9 +77,35 @@ export class BingoOCRParser {
     };
   }
 
-  private isLikelyNumber(text: string): boolean {
-    // Allow strings up to 4 characters that contain digits, but not just symbols
-    return /\d/.test(text) && text.length <= 4 && !/^[^\w\s]+$/.test(text);
+  private shouldProcessOCRResult(text: string): boolean {
+    // Allow "FREE" or "SPACE" for the free space
+    if (text.toUpperCase() === 'FREE' || text.toUpperCase() === 'SPACE') {
+      return true;
+    }
+    
+    // Must contain at least one digit
+    if (!/\d/.test(text)) {
+      return false;
+    }
+    
+    // Remove all non-digit characters and check if we have a reasonable length
+    const digitsOnly = text.replace(/[^\d]/g, '');
+    
+    // Must have at least 1 digit and not more than 12 (to handle concatenated numbers)
+    if (digitsOnly.length < 1 || digitsOnly.length > 12) {
+      return false;
+    }
+    
+    // Reject if it contains too many alphabetic characters relative to digits
+    const alphaCount = (text.match(/[a-zA-Z]/g) || []).length;
+    const digitCount = digitsOnly.length;
+    
+    // If more than 50% alphabetic characters, likely not a number
+    if (alphaCount > digitCount * 0.5) {
+      return false;
+    }
+    
+    return true;
   }
 
   private splitConcatenatedNumbers(text: string): number[] {
@@ -125,10 +151,17 @@ export class BingoOCRParser {
   }
 
   async parseBingoCard(imageBase64: string, apiKey: string): Promise<BingoCard> {
-    const ocrResults = await this.callGoogleVisionAPI(imageBase64, apiKey);
+    const rawOcrResults = await this.callGoogleVisionAPI(imageBase64, apiKey);
     
     // Add this line to log the raw OCR results
     console.log('Raw OCR Results:', ocrResults); 
+    
+    // Filter OCR results to only include likely numbers or FREE space content
+    const ocrResults = rawOcrResults.filter(result => this.shouldProcessOCRResult(result.text));
+    
+    // Add this line to log the filtered OCR results
+    console.log('Filtered OCR Results:', ocrResults);
+    console.log('Original OCR Results count:', rawOcrResults.length, 'Filtered count:', ocrResults.length);
     
     if (ocrResults.length === 0) {
       throw new Error('No text detected in the image');
