@@ -153,8 +153,8 @@ export class BingoOCRParser {
   async parseBingoCard(imageBase64: string, apiKey: string): Promise<BingoCard> {
     const rawOcrResults = await this.callGoogleVisionAPI(imageBase64, apiKey);
     
-    // Add this line to log the raw OCR results
-    console.log('Raw OCR Results:', ocrResults); 
+    // Log the raw OCR results
+    console.log('Raw OCR Results:', rawOcrResults);
     
     // Filter OCR results to only include likely numbers or FREE space content
     const ocrResults = rawOcrResults.filter(result => this.shouldProcessOCRResult(result.text));
