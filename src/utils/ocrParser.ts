@@ -109,34 +109,72 @@ export class BingoOCRParser {
   }
 
   private splitConcatenatedNumbers(text: string): number[] {
-    const numbers: number[] = [];
     const cleanText = text.replace(/[^\d]/g, ''); // Remove non-digits
     
-    if (cleanText.length === 0) return numbers;
+    if (cleanText.length === 0) return [];
     
-    // Prioritize 2-digit numbers if they form valid bingo numbers
-    if (cleanText.length >= 2) {
-      for (let i = 0; i <= cleanText.length - 2; i++) {
-        const twoDigit = parseInt(cleanText.substring(i, i + 2));
-        if (this.isValidBingoNumber(twoDigit)) {
-          numbers.push(twoDigit);
-          // If we found a 2-digit number, try to parse the rest of the string
-          // This simple approach might need refinement for complex cases like "1234" -> [12, 34]
-          // For now, it will find all valid 2-digit numbers.
+    // Find all possible numbers with their positions
+    const candidates: { value: number; start: number; end: number; length: number }[] = [];
+    
+    // Find 2-digit numbers first (higher priority)
+    for (let i = 0; i <= cleanText.length - 2; i++) {
+      const twoDigit = parseInt(cleanText.substring(i, i + 2));
+      if (this.isValidBingoNumber(twoDigit)) {
+        candidates.push({
+          value: twoDigit,
+          start: i,
+          end: i + 2,
+          length: 2
+        });
+      }
+    }
+    
+    // Find 1-digit numbers
+    for (let i = 0; i < cleanText.length; i++) {
+      const oneDigit = parseInt(cleanText[i]);
+      if (this.isValidBingoNumber(oneDigit)) {
+        candidates.push({
+          value: oneDigit,
+          start: i,
+          end: i + 1,
+          length: 1
+        });
+      }
+    }
+    
+    // Sort candidates: longer numbers first, then by position
+    candidates.sort((a, b) => {
+      if (a.length !== b.length) {
+        return b.length - a.length; // Longer numbers first
+      }
+      return a.start - b.start; // Earlier position first
+    });
+    
+    // Select non-overlapping numbers, prioritizing longer ones
+    const selectedNumbers: number[] = [];
+    const usedPositions = new Set<number>();
+    
+    for (const candidate of candidates) {
+      // Check if this candidate overlaps with any already selected positions
+      let hasOverlap = false;
+      for (let pos = candidate.start; pos < candidate.end; pos++) {
+        if (usedPositions.has(pos)) {
+          hasOverlap = true;
+          break;
+        }
+      }
+      
+      if (!hasOverlap) {
+        selectedNumbers.push(candidate.value);
+        // Mark all positions used by this candidate
+        for (let pos = candidate.start; pos < candidate.end; pos++) {
+          usedPositions.add(pos);
         }
       }
     }
-
-    // Also consider 1-digit numbers if no 2-digit numbers were found or as standalone
-    for (let i = 0; i < cleanText.length; i++) {
-      const oneDigit = parseInt(cleanText[i]);
-      if (this.isValidBingoNumber(oneDigit) && !numbers.includes(oneDigit)) { // Avoid duplicates if 1-digit is part of 2-digit
-        numbers.push(oneDigit);
-      }
-    }
-
-    // Sort and filter unique valid numbers
-    return Array.from(new Set(numbers.filter(n => this.isValidBingoNumber(n)))).sort((a, b) => a - b);
+    
+    // Return unique numbers sorted by value
+    return Array.from(new Set(selectedNumbers)).sort((a, b) => a - b);
   }
 
   private isValidBingoNumber(num: number): boolean {
