@@ -13,10 +13,15 @@ export class BingoOCRParser {
   private readonly FREE_SPACE_ROW = 2; // 0-indexed
   private readonly FREE_SPACE_COL = 2; // 0-indexed
 
-  // Common OCR character corrections
+  // Enhanced OCR character corrections
   private readonly OCR_CORRECTIONS = {
-    'O': '0', 'o': '0', 'l': '1', 'I': '1', 
-    'S': '5', 's': '5', 'G': '6', 'B': '8'
+    'O': '0', 'o': '0', 'Q': '0',
+    'l': '1', 'I': '1', '|': '1', 'i': '1',
+    'Z': '2', 'z': '2',
+    'S': '5', 's': '5',
+    'G': '6', 'b': '6',
+    'T': '7', 't': '7',
+    'B': '8', 'g': '9'
   };
 
   async callGoogleVisionAPI(imageBase64: string, apiKey: string): Promise<OCRResult[]> {
@@ -37,12 +42,15 @@ export class BingoOCRParser {
               },
               features: [
                 { type: 'TEXT_DETECTION', maxResults: 100 },
-                { type: 'DOCUMENT_TEXT_DETECTION', maxResults: 100 }
+                { type: 'DOCUMENT_TEXT_DETECTION', maxResults: 50 }
               ],
               imageContext: {
                 textDetectionParams: {
-                  enableTextDetectionConfidenceScore: true
-                }
+                  enableTextDetectionConfidenceScore: true,
+                  breakStrategy: "GREEDY",
+                  includeTextDetectionConfidenceScore: true
+                },
+                languageHints: ["en"]
               }
             }
           ]
@@ -105,47 +113,6 @@ export class BingoOCRParser {
     };
   }
 
-  private shouldProcessOCRResult(result: OCRResult): boolean {
-    const text = result.text.trim();
-    const confidence = result.confidence || 0;
-    
-    // Special cases - always allow FREE space content
-    if (text.toUpperCase() === 'FREE' || text.toUpperCase() === 'SPACE') {
-      return true;
-    }
-    
-    // Skip column headers
-    if (text.toUpperCase().match(/^[BINGO]$/)) {
-      return false;
-    }
-    
-    // More lenient confidence threshold
-    if (confidence < 0.5) {
-      return false;
-    }
-    
-    // Check for numbers (including partial OCR errors)
-    const hasDigits = /\d/.test(text);
-    if (!hasDigits) {
-      return false;
-    }
-    
-    const cleanNumber = text.replace(/[^\d]/g, "");
-    
-    // Allow 1-3 digit sequences (handles OCR errors better)
-    if (cleanNumber.length >= 1 && cleanNumber.length <= 3) {
-      const num = parseInt(cleanNumber);
-      return num >= 1 && num <= 75;
-    }
-    
-    // Also allow 4-digit sequences for concatenated numbers
-    if (cleanNumber.length === 4) {
-      return true;
-    }
-    
-    return false;
-  }
-
   private correctOCRErrors(text: string): string {
     let correctedText = text;
     
@@ -157,98 +124,71 @@ export class BingoOCRParser {
     return correctedText;
   }
 
-  private extractNumbers(text: string): number[] {
-    // First apply OCR corrections
-    const correctedText = this.correctOCRErrors(text);
+  private extractAllPossibleNumbers(text: string): number[] {
+    const numbers = new Set<number>();
     
-    // Extract all possible numbers
-    const numbers: number[] = [];
-    const matches = correctedText.match(/\d+/g) || [];
-    
-    matches.forEach(match => {
+    // Strategy 1: Direct number extraction
+    const directMatches = text.match(/\d{1,2}/g) || [];
+    directMatches.forEach(match => {
       const num = parseInt(match);
-      if (this.isValidBingoNumber(num)) {
-        numbers.push(num);
-      }
+      if (this.isValidBingoNumber(num)) numbers.add(num);
     });
     
-    return numbers;
+    // Strategy 2: With OCR correction
+    const corrected = this.correctOCRErrors(text);
+    const correctedMatches = corrected.match(/\d{1,2}/g) || [];
+    correctedMatches.forEach(match => {
+      const num = parseInt(match);
+      if (this.isValidBingoNumber(num)) numbers.add(num);
+    });
+    
+    // Strategy 3: Character-by-character analysis
+    for (let i = 0; i < text.length; i++) {
+      // Try 1-digit
+      if (/\d/.test(text[i])) {
+        const num = parseInt(text[i]);
+        if (this.isValidBingoNumber(num)) numbers.add(num);
+      }
+      
+      // Try 2-digit
+      if (i < text.length - 1 && /\d/.test(text[i]) && /\d/.test(text[i + 1])) {
+        const num = parseInt(text.substring(i, i + 2));
+        if (this.isValidBingoNumber(num)) numbers.add(num);
+      }
+    }
+    
+    return Array.from(numbers);
+  }
+
+  private shouldProcessOCRResult(result: OCRResult): boolean {
+    const text = result.text.trim();
+    const confidence = result.confidence || 0;
+    
+    // Special cases - always allow FREE space content
+    if (text.toUpperCase().match(/^(FREE|SPACE)$/)) {
+      return true;
+    }
+    
+    // Skip column headers
+    if (text.toUpperCase().match(/^[BINGO]$/)) {
+      return false;
+    }
+    
+    // Much more lenient for low-confidence scenarios
+    if (confidence < 0.3) return false;
+    
+    // If we have digits, be more permissive
+    if (/\d/.test(text)) {
+      const numbers = this.extractAllPossibleNumbers(text);
+      return numbers.length > 0;
+    }
+    
+    return false;
   }
 
   private splitConcatenatedNumbers(text: string): number[] {
-    // First try the enhanced extraction method
-    const extractedNumbers = this.extractNumbers(text);
-    if (extractedNumbers.length > 0) {
-      return extractedNumbers;
-    }
-    
-    // Fallback to original logic for complex cases
-    const cleanText = text.replace(/[^\d]/g, '');
-    
-    if (cleanText.length === 0) return [];
-    
-    // Find all possible numbers with their positions
-    const candidates: { value: number; start: number; end: number; length: number }[] = [];
-    
-    // Find 2-digit numbers first (higher priority)
-    for (let i = 0; i <= cleanText.length - 2; i++) {
-      const twoDigit = parseInt(cleanText.substring(i, i + 2));
-      if (this.isValidBingoNumber(twoDigit)) {
-        candidates.push({
-          value: twoDigit,
-          start: i,
-          end: i + 2,
-          length: 2
-        });
-      }
-    }
-    
-    // Find 1-digit numbers
-    for (let i = 0; i < cleanText.length; i++) {
-      const oneDigit = parseInt(cleanText[i]);
-      if (this.isValidBingoNumber(oneDigit)) {
-        candidates.push({
-          value: oneDigit,
-          start: i,
-          end: i + 1,
-          length: 1
-        });
-      }
-    }
-    
-    // Sort candidates: longer numbers first, then by position
-    candidates.sort((a, b) => {
-      if (a.length !== b.length) {
-        return b.length - a.length; // Longer numbers first
-      }
-      return a.start - b.start; // Earlier position first
-    });
-    
-    // Select non-overlapping numbers, prioritizing longer ones
-    const selectedNumbers: number[] = [];
-    const usedPositions = new Set<number>();
-    
-    for (const candidate of candidates) {
-      // Check if this candidate overlaps with any already selected positions
-      let hasOverlap = false;
-      for (let pos = candidate.start; pos < candidate.end; pos++) {
-        if (usedPositions.has(pos)) {
-          hasOverlap = true;
-          break;
-        }
-      }
-      
-      if (!hasOverlap) {
-        selectedNumbers.push(candidate.value);
-        // Mark all positions used by this candidate
-        for (let pos = candidate.start; pos < candidate.end; pos++) {
-          usedPositions.add(pos);
-        }
-      }
-    }
-    
-    // Return unique numbers sorted by value
-    return Array.from(new Set(selectedNumbers)).sort((a, b) => a - b);
+    // Use the enhanced extraction method
+    return this.extractAllPossibleNumbers(text);
   }
 
   private isValidBingoNumber(num: number): boolean {
@@ -262,32 +202,146 @@ export class BingoOCRParser {
     return number >= range.min && number <= range.max;
   }
 
-  private detectGridStructure(ocrResults: OCRResult[]): { useHeaders: boolean; columnBoundaries?: number[]; rowBoundaries?: number[] } {
-    // Find potential header row (B-I-N-G-O)
-    const headers = ocrResults.filter(r => 
+  private findHeaders(ocrResults: OCRResult[]): OCRResult[] {
+    return ocrResults.filter(r => 
       r.text.toUpperCase().match(/^[BINGO]$/)
     ).sort((a, b) => {
       const centerA = this.getCenter(a.vertices);
       const centerB = this.getCenter(b.vertices);
       return centerA.x - centerB.x;
     });
+  }
+
+  private clusterByDensity(ocrResults: OCRResult[]): OCRResult[] {
+    // Simple density clustering - group results by proximity
+    // This is a simplified implementation for now
+    return ocrResults.filter(result => {
+      const numbers = this.extractAllPossibleNumbers(result.text);
+      return numbers.length > 0;
+    });
+  }
+
+  private gridFromClusters(clusters: OCRResult[]): OCRResult[][][] {
+    // Simplified clustering approach - fallback to bounding box method
+    return this.gridFromBoundingBoxRelaxed(clusters);
+  }
+
+  private gridFromBoundingBoxRelaxed(ocrResults: OCRResult[]): OCRResult[][][] {
+    const grid: OCRResult[][][] = Array(5).fill(null).map(() => 
+      Array(5).fill(null).map(() => [])
+    );
     
-    console.log(`Found ${headers.length} potential column headers`);
+    // Calculate bounds with 10% padding
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    ocrResults.forEach(result => {
+      const bounds = this.getBoundingBox(result.vertices);
+      minX = Math.min(minX, bounds.minX);
+      minY = Math.min(minY, bounds.minY);
+      maxX = Math.max(maxX, bounds.maxX);
+      maxY = Math.max(maxY, bounds.maxY);
+    });
     
-    // Use headers to establish column boundaries if we have at least 3
-    if (headers.length >= 3) {
-      const columnBoundaries: number[] = [];
-      headers.forEach(header => {
-        const center = this.getCenter(header.vertices);
-        columnBoundaries.push(center.x);
-      });
+    const padding = 0.1;
+    const width = maxX - minX;
+    const height = maxY - minY;
+    minX -= width * padding;
+    minY -= height * padding;
+    maxX += width * padding;
+    maxY += height * padding;
+    
+    const cellWidth = (maxX - minX) / 5;
+    const cellHeight = (maxY - minY) / 5;
+    
+    ocrResults.forEach(result => {
+      const center = this.getCenter(result.vertices);
+      const col = Math.floor((center.x - minX) / cellWidth);
+      const row = Math.floor((center.y - minY) / cellHeight);
       
+      // Allow slight overflow with clamping
+      const clampedRow = Math.max(0, Math.min(4, row));
+      const clampedCol = Math.max(0, Math.min(4, col));
+      
+      grid[clampedRow][clampedCol].push(result);
+    });
+    
+    return grid;
+  }
+
+  private detectGridWithMultipleStrategies(ocrResults: OCRResult[]): OCRResult[][][] {
+    // Strategy 1: Header-based detection
+    const headers = this.findHeaders(ocrResults);
+    if (headers.length >= 3) {
       console.log("Using header-based grid detection");
-      return { useHeaders: true, columnBoundaries };
+      return this.gridFromHeaders(headers, ocrResults);
     }
     
-    console.log("Falling back to clustering-based grid detection");
-    return { useHeaders: false };
+    // Strategy 2: Density clustering
+    console.log("Using density-based clustering");
+    const clusters = this.clusterByDensity(ocrResults);
+    if (clusters.length >= 20) {
+      return this.gridFromClusters(clusters);
+    }
+    
+    // Strategy 3: Relaxed bounding box (current method with more tolerance)
+    console.log("Using relaxed bounding box method");
+    return this.gridFromBoundingBoxRelaxed(ocrResults);
+  }
+
+  private gridFromHeaders(headers: OCRResult[], ocrResults: OCRResult[]): OCRResult[][][] {
+    const grid: OCRResult[][][] = Array(5).fill(null).map(() => 
+      Array(5).fill(null).map(() => [])
+    );
+
+    // Use header positions to determine column boundaries
+    const boundaries = headers.map(header => this.getCenter(header.vertices).x);
+    const cellWidth = boundaries.length > 1 ? 
+      (boundaries[boundaries.length - 1] - boundaries[0]) / (boundaries.length - 1) : 100;
+    
+    // Find overall Y boundaries
+    let minY = Infinity, maxY = -Infinity;
+    ocrResults.forEach(result => {
+      const bounds = this.getBoundingBox(result.vertices);
+      minY = Math.min(minY, bounds.minY);
+      maxY = Math.max(maxY, bounds.maxY);
+    });
+    
+    const cellHeight = (maxY - minY) / this.GRID_SIZE;
+    const minX = boundaries[0] - cellWidth / 2;
+
+    ocrResults.forEach(result => {
+      const center = this.getCenter(result.vertices);
+      const col = Math.floor((center.x - minX) / cellWidth);
+      const row = Math.floor((center.y - minY) / cellHeight);
+
+      if (row >= 0 && row < this.GRID_SIZE && col >= 0 && col < this.GRID_SIZE) {
+        grid[row][col].push(result);
+      }
+    });
+
+    return grid;
+  }
+
+  private logOCRAnalysis(ocrResults: OCRResult[], filteredResults: OCRResult[]): void {
+    console.log("=== OCR ANALYSIS DEBUG ===");
+    console.log(`Raw results: ${ocrResults.length}`);
+    console.log(`Filtered results: ${filteredResults.length}`);
+    
+    console.log("\nConfidence distribution:");
+    const confidences = ocrResults.map(r => r.confidence || 0);
+    console.log(`Min: ${Math.min(...confidences).toFixed(2)}, Max: ${Math.max(...confidences).toFixed(2)}`);
+    
+    console.log("\nFiltered out results:");
+    ocrResults.forEach(result => {
+      if (!this.shouldProcessOCRResult(result)) {
+        console.log(`REJECTED: "${result.text}" (conf: ${(result.confidence || 0).toFixed(2)})`);
+      }
+    });
+    
+    console.log("\nAccepted results:");
+    filteredResults.forEach(result => {
+      const numbers = this.extractAllPossibleNumbers(result.text);
+      console.log(`ACCEPTED: "${result.text}" -> numbers: [${numbers.join(', ')}] (conf: ${(result.confidence || 0).toFixed(2)})`);
+    });
   }
 
   async parseBingoCard(imageBase64: string, apiKey: string): Promise<BingoCard> {
@@ -299,60 +353,15 @@ export class BingoOCRParser {
       
       console.log('Filtered OCR Results:', ocrResults.length, 'from', rawOcrResults.length, 'total');
       
+      // Add debug logging
+      this.logOCRAnalysis(rawOcrResults, ocrResults);
+      
       if (ocrResults.length === 0) {
         throw new Error('No valid text detected in the image. Please ensure the image is clear and well-lit.');
       }
 
-      // Detect grid structure
-      const gridStructure = this.detectGridStructure(rawOcrResults);
-
-      // Find the overall bounding box of the card
-      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-      
-      // Use all OCR results to determine the overall card boundaries
-      ocrResults.forEach(result => {
-        const bbox = this.getBoundingBox(result.vertices);
-        minX = Math.min(minX, bbox.minX);
-        minY = Math.min(minY, bbox.minY);
-        maxX = Math.max(maxX, bbox.maxX);
-        maxY = Math.max(maxY, bbox.maxY);
-      });
-
-      // Calculate cell dimensions
-      let cellWidth: number;
-      let cellHeight: number;
-      
-      if (gridStructure.useHeaders && gridStructure.columnBoundaries) {
-        // Use header positions to determine column widths
-        const boundaries = gridStructure.columnBoundaries;
-        cellWidth = (boundaries[boundaries.length - 1] - boundaries[0]) / (boundaries.length - 1);
-        cellHeight = (maxY - minY) / this.GRID_SIZE;
-        
-        // Adjust minX to align with leftmost header
-        minX = boundaries[0] - cellWidth / 2;
-      } else {
-        // Fallback to uniform grid
-        cellWidth = (maxX - minX) / this.GRID_SIZE;
-        cellHeight = (maxY - minY) / this.GRID_SIZE;
-      }
-
-      console.log(`Grid dimensions: ${cellWidth.toFixed(1)} x ${cellHeight.toFixed(1)}`);
-
-      // Initialize a 5x5 grid to hold OCR results for each cell
-      const gridCells: OCRResult[][][] = Array(this.GRID_SIZE).fill(null).map(() => 
-        Array(this.GRID_SIZE).fill(null).map(() => [])
-      );
-
-      // Map OCR results to their respective grid cells
-      ocrResults.forEach(result => {
-        const center = this.getCenter(result.vertices);
-        const col = Math.floor((center.x - minX) / cellWidth);
-        const row = Math.floor((center.y - minY) / cellHeight);
-
-        if (row >= 0 && row < this.GRID_SIZE && col >= 0 && col < this.GRID_SIZE) {
-          gridCells[row][col].push(result);
-        }
-      });
+      // Use enhanced grid detection with multiple strategies
+      const gridCells = this.detectGridWithMultipleStrategies(ocrResults);
 
       const numbers: BingoNumber[] = [];
       let freeSpaceContent: string | null = null;
@@ -383,7 +392,7 @@ export class BingoOCRParser {
           const cellCandidates: BingoNumber[] = [];
           
           for (const result of cellResults) {
-            const extractedNumbers = this.splitConcatenatedNumbers(result.text);
+            const extractedNumbers = this.extractAllPossibleNumbers(result.text);
             
             for (const num of extractedNumbers) {
               if (this.validateNumberInColumn(num, col)) {
@@ -415,6 +424,11 @@ export class BingoOCRParser {
       const evensCount = numbers.filter(n => !n.isOdd).length;
 
       console.log(`Analysis complete: ${detectedNumberCount} numbers detected (${oddsCount} odds, ${evensCount} evens)`);
+
+      // If we got very few numbers, suggest trying alternative detection
+      if (detectedNumberCount < 15) {
+        console.warn(`Low detection rate (${detectedNumberCount}/24). Consider image quality improvements.`);
+      }
 
       return {
         numbers,
