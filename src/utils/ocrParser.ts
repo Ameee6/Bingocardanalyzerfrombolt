@@ -78,6 +78,7 @@ export class BingoOCRParser {
   }
 
   private shouldProcessOCRResult(text: string): boolean {
+  }
   private shouldProcessOCRResult(result: OCRResult): boolean {
     const text = result.text;
     const confidence = result.confidence;
